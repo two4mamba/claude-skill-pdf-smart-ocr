@@ -22,16 +22,27 @@ For large image PDFs, MinerU runs are **auto-chunked** to avoid OOM on 32 GB-cla
 
 ## Cloud VLM providers (image_vlm mode)
 
-Each provider needs its API key in an environment variable. Default is **SiliconFlow** (free).
+Each provider needs its API key in an environment variable. Default is **Mistral OCR** — empirically fastest + most reliable (see [benchmark](#empirical-comparison-2026-05-06)).
 
-| Provider | Default model | Env var | Pricing |
-|----------|--------------|---------|---------|
-| `siliconflow` (default) | `PaddlePaddle/PaddleOCR-VL-1.5` | `SILICONFLOW_API_KEY` | **Free** (rate-limited; ~50 RPD without paid history) |
-| `mistral` | `mistral-ocr-latest` | `MISTRAL_API_KEY` | $1–2 / 1000 pages; free tier 1 RPS / 1B tok per month |
-| `deepinfra` | `deepseek-ai/DeepSeek-OCR` | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok |
-| `openrouter` | `qwen/qwen2.5-vl-72b-instruct` | `OPENROUTER_API_KEY` | $0.25 in / $0.75 out per M tok |
+| Provider | Default model | Env var | Pricing | Notes |
+|----------|--------------|---------|---------|-------|
+| **`mistral`** (default) | `mistral-ocr-latest` | `MISTRAL_API_KEY` | $1–2 / 1000 pages; free tier 1 RPS / 1B tok / month, no credit card | ~6 s/page; reliable layout |
+| `siliconflow` | `PaddlePaddle/PaddleOCR-VL-1.5` | `SILICONFLOW_API_KEY` | **Free** (rate-limited; ~50 RPD without paid history) | ~100 s/page on free tier; hallucinates on visually-complex pages — use for clean text scans only |
+| `deepinfra` | `deepseek-ai/DeepSeek-OCR` | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok | |
+| `openrouter` | `qwen/qwen2.5-vl-72b-instruct` | `OPENROUTER_API_KEY` | $0.25 in / $0.75 out per M tok | |
 
 Override the default with `--vlm-provider <name>` or set `PDF_SMART_OCR_VLM_PROVIDER` env var. Override the model with `--vlm-model <name>`.
+
+### Empirical comparison (2026-05-06)
+
+10-page Chinese PowerPoint export (image PDF, no text layer) — image-heavy slide deck:
+
+| Provider | Total time | Per page | Failed pages | Notes |
+|----------|-----------|---------|-------------|-------|
+| **Mistral OCR** | **58.6 s** | **5.9 s** | 0/10 | Headings, lists, bilingual text all preserved |
+| SiliconFlow PaddleOCR-VL-1.5 (free) | 711 s (7 pages) | 101.6 s | 3/7 (43%) | On visually-complex pages, model degenerates and emits `1. 1. 2. 3. ... 840.` until max_tokens |
+
+**Conclusion**: For PowerPoint-export PDFs (which mix dense visuals with sparse text), Mistral wins on every dimension. SiliconFlow PaddleOCR-VL-1.5 is only acceptable for clean text-heavy scans.
 
 > ⚠ **Important**: `Qwen2.5-72B-Instruct` (no `-VL`) is **text-only and cannot OCR**. The default for OpenRouter is the vision variant `qwen/qwen2.5-vl-72b-instruct`.
 

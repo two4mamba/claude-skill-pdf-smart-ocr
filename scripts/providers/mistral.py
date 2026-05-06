@@ -8,6 +8,7 @@ POST /v1/ocr  with  { model, document: { type: 'image_url', image_url: '...' } }
 """
 from __future__ import annotations
 
+import html
 import json
 
 from .base import VLMProvider, OcrError
@@ -34,7 +35,8 @@ class MistralProvider(VLMProvider):
         # Mistral returns {pages: [{markdown: '...', ...}], ...}
         try:
             pages = resp["pages"]
-            return "\n\n".join(p.get("markdown", "") for p in pages).strip()
+            md = "\n\n".join(p.get("markdown", "") for p in pages).strip()
+            return html.unescape(md)  # Mistral escapes `>` as `&gt;` in markdown
         except (KeyError, TypeError) as e:
             raise OcrError(
                 f"Unexpected Mistral OCR response: {json.dumps(resp)[:500]}"

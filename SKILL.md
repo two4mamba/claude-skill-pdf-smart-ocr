@@ -46,12 +46,12 @@ Trigger this skill when the user asks any of:
 
 For `image_vlm` mode, additionally **one** of these env vars (per chosen provider):
 
-| Provider (default model) | Env var | Cost |
-|---|---|---|
-| `siliconflow` (PaddleOCR-VL-1.5) — default | `SILICONFLOW_API_KEY` | **free** (rate-limited) |
-| `mistral` (mistral-ocr-latest) | `MISTRAL_API_KEY` | $1–2 / 1000 pages, free tier 1B tok/mo |
-| `deepinfra` (deepseek-ai/DeepSeek-OCR) | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok |
-| `openrouter` (qwen/qwen2.5-vl-72b-instruct) | `OPENROUTER_API_KEY` | $0.25 in / $0.75 out per M tok |
+| Provider (default model) | Env var | Cost | Notes |
+|---|---|---|---|
+| **`mistral`** (mistral-ocr-latest) — **default** | `MISTRAL_API_KEY` | $1–2 / 1000 pages; free tier 1 RPS / 1B tok/mo | Best speed (~6 s/page) + reliable layout |
+| `siliconflow` (PaddleOCR-VL-1.5) | `SILICONFLOW_API_KEY` | free (rate-limited) | ~100 s/page on free tier; **hallucinates on visually-complex PPT pages** — use only for clean text-heavy scans |
+| `deepinfra` (deepseek-ai/DeepSeek-OCR) | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok | OpenAI Chat-Compat |
+| `openrouter` (qwen/qwen2.5-vl-72b-instruct) | `OPENROUTER_API_KEY` | $0.25 in / $0.75 out per M tok | General-purpose VLM |
 
 If a required tool is missing, tell the user which one and stop.
 
@@ -102,7 +102,7 @@ Highest quality path; token cost grows linearly with pages — that's why it's b
 python "<SKILL_DIR>/scripts/extract.py" --mode image_vlm --pdf "<pdf>" --out "<out_dir>"
 ```
 
-Default provider is `siliconflow` (free PaddleOCR-VL-1.5). Override:
+Default provider is `mistral` (fastest + reliable; free tier sufficient for personal use). Override:
 
 ```bash
 # pick a different provider

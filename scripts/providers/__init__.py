@@ -11,8 +11,13 @@ from .openrouter import OpenRouterProvider
 
 
 PROVIDERS: dict[str, type[VLMProvider]] = {
-    "siliconflow": SiliconFlowProvider,  # default: free PaddleOCR-VL-1.5
+    # default: mistral — fastest cloud OCR with reliable layout fidelity.
+    # Free tier (1 RPS, 1B tokens/month, no credit card) covers most personal use.
     "mistral": MistralProvider,
+    # siliconflow PaddleOCR-VL-1.5 is "free" but ~100s/page on free tier and
+    # hallucinates on visually complex pages (PPT exports). Useful as backup
+    # for clean text-only image PDFs.
+    "siliconflow": SiliconFlowProvider,
     "deepinfra": DeepInfraProvider,
     "openrouter": OpenRouterProvider,
 }

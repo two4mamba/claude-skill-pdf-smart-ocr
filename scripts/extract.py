@@ -267,9 +267,10 @@ def main():
     ap.add_argument("--keep-intermediate", action="store_true",
                     help="Keep per-chunk dirs under <out>/_chunks (debugging).")
     ap.add_argument("--vlm-provider",
-                    choices=["siliconflow", "mistral", "deepinfra", "openrouter"],
-                    default=os.environ.get("PDF_SMART_OCR_VLM_PROVIDER", "siliconflow"),
-                    help="VLM cloud provider for image_vlm mode (default: siliconflow / free).")
+                    choices=["mistral", "siliconflow", "deepinfra", "openrouter"],
+                    default=os.environ.get("PDF_SMART_OCR_VLM_PROVIDER", "mistral"),
+                    help="VLM cloud provider for image_vlm mode "
+                         "(default: mistral — fastest + most reliable; free tier covers most use).")
     ap.add_argument("--vlm-model", default=None,
                     help="Override the default model name for the chosen provider.")
     args = ap.parse_args()

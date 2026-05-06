@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
 import urllib.error
@@ -107,6 +108,6 @@ class VLMProvider(ABC):
         }
         resp = self._post_json(url, headers, payload)
         try:
-            return resp["choices"][0]["message"]["content"]
+            return html.unescape(resp["choices"][0]["message"]["content"])
         except (KeyError, IndexError) as e:
             raise OcrError(f"Unexpected response from {url}: {json.dumps(resp)[:500]}") from e
