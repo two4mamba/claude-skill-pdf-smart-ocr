@@ -1,8 +1,10 @@
 """Dispatch a PDF to the right extraction engine and produce Markdown.
 
 Usage:
-    python extract.py --mode {auto|text|image_small|image_large} \
+    python extract.py --mode {auto|text|image_small|image_vlm|image_large} \
                       --pdf <pdf_path> --out <out_dir> \
+                      [--vlm-provider {siliconflow|mistral|deepinfra|openrouter}] \
+                      [--vlm-model <model_name>] \
                       [--mineru-backend pipeline|vlm-auto-engine|hybrid-auto-engine] \
                       [--lang ch] [--render-dpi 150] \
                       [--chunk-size 50] [--keep-intermediate]
@@ -10,11 +12,17 @@ Usage:
 Modes:
     auto         Run classify, then dispatch.
     text         markitdown (fast, text-layer PDFs).
-    image_small  Render pages to PNG; caller (Claude) reads them with vision.
-    image_large  Local MinerU CLI. Auto-chunks large PDFs to avoid OOM.
+    image_small  Render pages to PNG; caller (Claude) reads them with vision (≤50 pages).
+    image_vlm    Render + send each page to a cloud VLM API (51–100 pages typical).
+    image_large  Local MinerU CLI (>100 pages typical, auto-chunks to avoid OOM).
 
 For `image_small`, this script only renders. The caller must read the PNGs and
 write the final .md.
+
+For `image_vlm`:
+- Renders each page, calls the chosen VLM provider per page, concatenates Markdown.
+- Default provider: siliconflow (free PaddleOCR-VL-1.5). Override with --vlm-provider.
+- Each provider needs an API key in its env var (see providers/*.py).
 
 For `image_large`:
 - If pages <= chunk-size, MinerU runs once.
@@ -103,6 +111,47 @@ def run_image_small(pdf: Path, out_dir: Path, dpi: int = 150) -> Path:
     cmd = ["pdftoppm", "-r", str(dpi), "-png", str(pdf), str(pages_dir / "p")]
     subprocess.check_call(cmd)
     return pages_dir
+
+
+def run_image_vlm(
+    pdf: Path,
+    out_dir: Path,
+    provider_name: str,
+    model: str | None = None,
+    lang: str = "ch",
+    dpi: int = 150,
+) -> Path:
+    """Render each page, send to a cloud VLM provider, concatenate the Markdown."""
+    # Local import: providers package may pull urllib etc; defer until this path runs.
+    sys.path.insert(0, str(Path(__file__).parent))
+    from providers import get_provider
+
+    provider = get_provider(provider_name)
+    log(f"VLM provider: {provider.name}, model: {model or provider.default_model}")
+
+    pages_dir = ensure_dir(out_dir / "_pages")
+    cmd = ["pdftoppm", "-r", str(dpi), "-png", str(pdf), str(pages_dir / "p")]
+    subprocess.check_call(cmd)
+    pngs = sorted(pages_dir.glob("p-*.png"))
+    if not pngs:
+        raise SystemExit(f"No pages rendered to {pages_dir}")
+
+    md_parts: list[str] = []
+    for i, png in enumerate(pngs, 1):
+        log(f"  page {i}/{len(pngs)}: {png.name}")
+        img_bytes = png.read_bytes()
+        try:
+            md = provider.ocr_image(img_bytes, model=model, lang=lang)
+        except Exception as e:
+            raise SystemExit(f"VLM provider {provider.name} failed on page {i}: {e}")
+        md_parts.append(md.strip())
+
+    final_md = out_dir / f"{pdf.stem}.md"
+    final_md.write_text("\n\n---\n\n".join(md_parts), encoding="utf-8")
+
+    # Clean rendered pages (we keep only the markdown)
+    shutil.rmtree(pages_dir, ignore_errors=True)
+    return final_md
 
 
 def _mineru_run(pdf: Path, dest: Path, backend: str, lang: str, start: int, end: int) -> Path:
@@ -206,7 +255,8 @@ def run_image_large(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["auto", "text", "image_small", "image_large"], default="auto")
+    ap.add_argument("--mode", choices=["auto", "text", "image_small", "image_vlm", "image_large"],
+                    default="auto")
     ap.add_argument("--pdf", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--mineru-backend", default="pipeline")
@@ -216,6 +266,12 @@ def main():
                     help="Max pages per MinerU invocation (default 50). Lower if you OOM.")
     ap.add_argument("--keep-intermediate", action="store_true",
                     help="Keep per-chunk dirs under <out>/_chunks (debugging).")
+    ap.add_argument("--vlm-provider",
+                    choices=["siliconflow", "mistral", "deepinfra", "openrouter"],
+                    default=os.environ.get("PDF_SMART_OCR_VLM_PROVIDER", "siliconflow"),
+                    help="VLM cloud provider for image_vlm mode (default: siliconflow / free).")
+    ap.add_argument("--vlm-model", default=None,
+                    help="Override the default model name for the chosen provider.")
     args = ap.parse_args()
 
     pdf = Path(args.pdf).resolve()
@@ -243,6 +299,21 @@ def main():
             "mode": "image_small",
             "pages_dir": str(pages_dir),
             "next_step": "Caller MUST read each PNG with vision and write the final .md",
+        }, ensure_ascii=False))
+    elif mode == "image_vlm":
+        result_path = run_image_vlm(
+            pdf, out_dir,
+            provider_name=args.vlm_provider,
+            model=args.vlm_model,
+            lang=args.lang,
+            dpi=args.render_dpi,
+        )
+        log(f"DONE (VLM/{args.vlm_provider}) → {result_path}  ({time.time()-t0:.1f}s)")
+        print(json.dumps({
+            "mode": "image_vlm",
+            "provider": args.vlm_provider,
+            "model": args.vlm_model,
+            "output": str(result_path),
         }, ensure_ascii=False))
     elif mode == "image_large":
         result_path = run_image_large(

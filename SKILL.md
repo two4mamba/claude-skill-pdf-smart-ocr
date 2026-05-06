@@ -1,6 +1,6 @@
 ---
 name: pdf-smart-ocr
-description: Smart PDF → Markdown extractor that picks the best engine automatically. Use when the user asks to extract / OCR / convert / parse a PDF (especially scanned, image-based, or PowerPoint-export PDFs) into markdown text. Routes between markitdown (for text PDFs), pdftoppm + vision (for small image PDFs ≤ 10 pages), and MinerU CLI (for large image PDFs > 10 pages). Preserves layout, tables, formulas, headings.
+description: Smart PDF → Markdown extractor that picks the best engine automatically. Use when the user asks to extract / OCR / convert / parse a PDF (especially scanned, image-based, or PowerPoint-export PDFs) into markdown text. Routes between markitdown (text PDFs), pdftoppm + Claude vision (image PDFs ≤50 pages), cloud VLM APIs (51–100 pages, configurable provider), and MinerU CLI (>100 pages, local). Preserves layout, tables, formulas, headings.
 ---
 
 # pdf-smart-ocr
@@ -19,52 +19,57 @@ Trigger this skill when the user asks any of:
 ## Decision tree
 
 ```
-┌──────────────────────────────────────────┐
-│ Input PDF                                │
-└────────────────┬─────────────────────────┘
-                 │
-        run classify.py
-                 │
-   ┌─────────────┼─────────────────────────┐
-   │             │                          │
-text PDF    image, ≤10 pages         image, >10 pages
-   │             │                          │
-markitdown   pdftoppm + Read              mineru CLI
-   │         (vision read)               (local OCR/VLM)
-   │             │                          │
-   └─────────────┴───────────► Markdown output
+                       Input PDF
+                          │
+                  run classify.py
+                          │
+       ┌──────────────────┼──────────────────┬─────────────────────┐
+       │                  │                   │                     │
+   text PDF          image, ≤50 pgs      image, 51–100 pgs    image, >100 pgs
+       │                  │                   │                     │
+  markitdown         pdftoppm           pdftoppm + cloud         MinerU CLI
+       │           + Claude vision        VLM API per page       (auto-chunked)
+       │                  │                   │                     │
+       └──────────────────┴───────────────────┴─────────────────────┘
+                                              │
+                                       Markdown output
 ```
 
 ## Required environment
 
-The skill assumes these are already installed (this machine has them):
-
 | Tool | Purpose | Verify |
 |------|---------|--------|
 | `pdftoppm` (poppler) | Render PDF → PNG | `pdftoppm -v` |
-| `mineru` CLI | Heavy-duty OCR/VLM parsing | `mineru --version` |
+| `mineru` CLI | Heavy-duty OCR/VLM parsing (image_large) | `mineru --version` |
 | `markitdown` Python pkg | Fast text-PDF conversion | `python -c "import markitdown"` |
-| `pdfplumber` Python pkg | Text-layer probing | `python -c "import pdfplumber"` |
+| `pdfplumber` / `pypdf` / `pypdfium2` | Text-layer probing + page count | `python -c "import pdfplumber"` |
 
-If a tool is missing, tell the user which one and stop.
+For `image_vlm` mode, additionally **one** of these env vars (per chosen provider):
+
+| Provider (default model) | Env var | Cost |
+|---|---|---|
+| `siliconflow` (PaddleOCR-VL-1.5) — default | `SILICONFLOW_API_KEY` | **free** (rate-limited) |
+| `mistral` (mistral-ocr-latest) | `MISTRAL_API_KEY` | $1–2 / 1000 pages, free tier 1B tok/mo |
+| `deepinfra` (deepseek-ai/DeepSeek-OCR) | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok |
+| `openrouter` (qwen/qwen2.5-vl-72b-instruct) | `OPENROUTER_API_KEY` | $0.25 in / $0.75 out per M tok |
+
+If a required tool is missing, tell the user which one and stop.
 
 ## Step-by-step procedure
 
 ### Step 1 — Classify
 
-Run:
-
 ```bash
 python "<SKILL_DIR>/scripts/classify.py" "<absolute-pdf-path>"
 ```
 
-It prints a single JSON line, e.g.:
+Returns a single JSON line, e.g.:
 
 ```json
-{"pages": 142, "sampled_pages": 10, "text_chars": 21, "avg_chars_per_page": 2, "has_text_layer": false, "recommendation": "image_large"}
+{"pages": 142, "has_text_layer": false, "recommendation": "image_large"}
 ```
 
-Possible recommendations: `text`, `image_small`, `image_large`.
+Possible recommendations: `text`, `image_small`, `image_vlm`, `image_large`.
 
 ### Step 2 — Dispatch
 
@@ -78,20 +83,44 @@ python "<SKILL_DIR>/scripts/extract.py" --mode text --pdf "<pdf>" --out "<out_di
 
 Produces `<out_dir>/<pdf-stem>.md`. Fast (seconds).
 
-#### B. `image_small` → render + vision
+#### B. `image_small` (≤50 pages) → render + Claude vision
 
 ```bash
 python "<SKILL_DIR>/scripts/extract.py" --mode image_small --pdf "<pdf>" --out "<out_dir>"
 ```
 
-This renders pages to `<out_dir>/_pages/p001.png …`. You (Claude) MUST then:
+This only renders pages to `<out_dir>/_pages/p-001.png …`. You (Claude) MUST then:
 1. Read each PNG with the `Read` tool (vision-capable).
 2. Combine the visual reading into a structured markdown file at `<out_dir>/<pdf-stem>.md`.
-3. Delete `<out_dir>/_pages/` after writing the .md (free disk).
+3. Delete `<out_dir>/_pages/` after writing the .md.
 
-Use this path for ≤10 pages — token cost is acceptable, quality is highest.
+Highest quality path; token cost grows linearly with pages — that's why it's bounded at ≤50.
 
-#### C. `image_large` → MinerU (auto-chunked)
+#### C. `image_vlm` (51–100 pages) → cloud VLM API
+
+```bash
+python "<SKILL_DIR>/scripts/extract.py" --mode image_vlm --pdf "<pdf>" --out "<out_dir>"
+```
+
+Default provider is `siliconflow` (free PaddleOCR-VL-1.5). Override:
+
+```bash
+# pick a different provider
+python "<SKILL_DIR>/scripts/extract.py" --mode image_vlm \
+    --pdf "<pdf>" --out "<out_dir>" \
+    --vlm-provider mistral       # or siliconflow / deepinfra / openrouter
+
+# pick a specific model on that provider
+python "<SKILL_DIR>/scripts/extract.py" --mode image_vlm \
+    --pdf "<pdf>" --out "<out_dir>" \
+    --vlm-provider openrouter --vlm-model qwen/qwen2.5-vl-32b-instruct
+```
+
+Or set `PDF_SMART_OCR_VLM_PROVIDER` env var to change the default once.
+
+If the chosen provider's env var is missing, the script fails fast with a clear message naming the var.
+
+#### D. `image_large` (>100 pages) → MinerU (auto-chunked)
 
 ```bash
 python "<SKILL_DIR>/scripts/extract.py" --mode image_large --pdf "<pdf>" --out "<out_dir>"
@@ -99,7 +128,7 @@ python "<SKILL_DIR>/scripts/extract.py" --mode image_large --pdf "<pdf>" --out "
 
 Internally:
 - If pages ≤ `--chunk-size` (default 50), MinerU runs once.
-- If pages > chunk-size, the PDF is processed in sequential page ranges to avoid OOM (32GB RAM laptops can OOM on 100+ pages in one shot). Per-chunk outputs are merged and intermediate dirs cleaned.
+- If pages > chunk-size, the PDF is processed in sequential page ranges to avoid OOM. Per-chunk outputs are merged and intermediate dirs cleaned.
 
 **Final output layout** (clean, one file + images):
 
@@ -122,27 +151,28 @@ Tell the user:
 - Which path was chosen and why (e.g., "142 pages, no text layer → MinerU pipeline backend").
 - Output location.
 - How long it took.
-- Any caveats (e.g., MinerU first run downloads ~5–10 GB of models).
+- Any caveats (e.g., MinerU first run downloads ~1 GB of models; VLM API needs key).
 
 ## Manual override
 
 If the user explicitly asks for a specific engine, skip classify and pass `--mode` directly:
 - `--mode text` (force markitdown)
-- `--mode image_small` (force vision read, suitable up to ~30 pages but expensive)
-- `--mode image_large` (force MinerU)
-
-Backend hint can be added with `--mineru-backend pipeline|vlm-auto-engine|hybrid-auto-engine`.
+- `--mode image_small` (force Claude vision; expensive for many pages)
+- `--mode image_vlm` (force cloud VLM regardless of size; pair with `--vlm-provider`)
+- `--mode image_large` (force local MinerU)
 
 ## Failure handling
 
 | Symptom | Likely cause | Action |
 |---------|-------------|--------|
-| `pdftoppm: not found` | poppler missing or PATH not refreshed | Check `where pdftoppm`; user may need to restart shell |
-| `mineru: not found` | venv not activated / not on PATH | `extract.py` auto-resolves via `MINERU_EXE` env var → `shutil.which("mineru")` → Windows fallback. Set `MINERU_EXE` if you used a non-default path. |
-| MinerU first run hangs | Downloading 5–10 GB models | Inform user; let it run; subsequent runs are fast |
-| OOM during MinerU | per-chunk RAM still too high | Re-run with smaller `--chunk-size 25` (or 10) |
-| Garbled Chinese in output | Wrong language hint | Add `-l ch` (default), or `ch_lite` / `ch_server` for variants |
+| `pdftoppm: not found` | poppler missing or PATH not refreshed | Check `where pdftoppm`; restart shell |
+| `mineru: not found` | venv not activated / not on PATH | Set `MINERU_EXE` env var or activate venv |
+| MinerU first run hangs | Downloading models (~1 GB) | Inform user; subsequent runs are fast |
+| OOM during MinerU | per-chunk RAM too high | Re-run with smaller `--chunk-size 25` (or 10) |
+| `Missing API key. Set environment variable XXX_API_KEY` | VLM provider key not exported | Set the named env var, retry |
+| `429` from a VLM provider | rate limit hit | Switch provider (e.g., siliconflow→novita) or wait |
+| Garbled Chinese in output | wrong language hint | Add `-l ch` (default), or `ch_lite` / `ch_server` |
 
 ## Output convention
 
-Always write the final `.md` next to the source PDF (or in the user-specified output dir). For MinerU, also keep its `images/` folder so figures render correctly when the markdown is opened.
+Always write the final `.md` next to the source PDF (or in the user-specified output dir). For `image_large` (MinerU), also keep its `images/` folder so figures render correctly when the markdown is opened.

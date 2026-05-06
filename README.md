@@ -14,10 +14,26 @@ Given a PDF, the skill:
 | PDF type | Engine | Why | Speed |
 |----------|--------|-----|-------|
 | Text PDF (has text layer) | [`markitdown`](https://github.com/microsoft/markitdown) | No OCR needed | seconds |
-| Image PDF, ≤ 10 pages | `pdftoppm` + Claude vision | Highest fidelity for short docs | seconds, modest tokens |
-| Image PDF, > 10 pages | [MinerU](https://github.com/opendatalab/MinerU) CLI | Preserves headings, lists, tables, formulas, embeds figures | 3–10 s/page on CPU |
+| Image PDF, ≤ 50 pages | `pdftoppm` + Claude vision | Highest fidelity for short docs | seconds, modest tokens |
+| Image PDF, 51–100 pages | Cloud VLM API (configurable) | No local GPU needed; pick free or paid | 1–3 s/page |
+| Image PDF, > 100 pages | [MinerU](https://github.com/opendatalab/MinerU) CLI | Preserves layout, embeds figures | 3–10 s/page on CPU |
 
 For large image PDFs, MinerU runs are **auto-chunked** to avoid OOM on 32 GB-class machines, and the resulting chunk markdowns are merged with content-hash deduplication of extracted images.
+
+## Cloud VLM providers (image_vlm mode)
+
+Each provider needs its API key in an environment variable. Default is **SiliconFlow** (free).
+
+| Provider | Default model | Env var | Pricing |
+|----------|--------------|---------|---------|
+| `siliconflow` (default) | `PaddlePaddle/PaddleOCR-VL-1.5` | `SILICONFLOW_API_KEY` | **Free** (rate-limited; ~50 RPD without paid history) |
+| `mistral` | `mistral-ocr-latest` | `MISTRAL_API_KEY` | $1–2 / 1000 pages; free tier 1 RPS / 1B tok per month |
+| `deepinfra` | `deepseek-ai/DeepSeek-OCR` | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok |
+| `openrouter` | `qwen/qwen2.5-vl-72b-instruct` | `OPENROUTER_API_KEY` | $0.25 in / $0.75 out per M tok |
+
+Override the default with `--vlm-provider <name>` or set `PDF_SMART_OCR_VLM_PROVIDER` env var. Override the model with `--vlm-model <name>`.
+
+> ⚠ **Important**: `Qwen2.5-72B-Instruct` (no `-VL`) is **text-only and cannot OCR**. The default for OpenRouter is the vision variant `qwen/qwen2.5-vl-72b-instruct`.
 
 ## Why not just use one tool?
 
@@ -96,9 +112,20 @@ python scripts/extract.py --mode auto --pdf X.pdf --out out_dir
 # Force a specific engine
 python scripts/extract.py --mode text         --pdf X.pdf --out out_dir
 python scripts/extract.py --mode image_small  --pdf X.pdf --out out_dir
+python scripts/extract.py --mode image_vlm    --pdf X.pdf --out out_dir
 python scripts/extract.py --mode image_large  --pdf X.pdf --out out_dir
 
-# Tweak chunking and backend
+# Cloud VLM mode — pick a provider/model
+python scripts/extract.py --mode image_vlm \
+    --pdf X.pdf --out out_dir \
+    --vlm-provider mistral
+
+python scripts/extract.py --mode image_vlm \
+    --pdf X.pdf --out out_dir \
+    --vlm-provider openrouter \
+    --vlm-model qwen/qwen2.5-vl-32b-instruct
+
+# MinerU — tweak chunking and backend
 python scripts/extract.py --mode image_large \
     --pdf X.pdf --out out_dir \
     --chunk-size 25 \
@@ -128,13 +155,29 @@ Intermediate per-chunk dirs go under `_chunks/` and are removed unless `--keep-i
 
 ```
 pdf-smart-ocr/
-├── SKILL.md              # Claude-readable spec & decision tree
+├── SKILL.md                       # Claude-readable spec & decision tree
 ├── scripts/
-│   ├── classify.py       # Probe text-layer density + page count
-│   └── extract.py        # Dispatcher; auto-chunking for large image PDFs
+│   ├── classify.py                # Probe text-layer density + page count
+│   ├── extract.py                 # Dispatcher; auto-chunking for image_large
+│   └── providers/                 # VLM cloud provider implementations
+│       ├── __init__.py            # Registry: get_provider(name) → instance
+│       ├── base.py                # VLMProvider ABC + chat-completions helper
+│       ├── siliconflow.py         # Free PaddleOCR-VL-1.5
+│       ├── mistral.py             # Mistral OCR (dedicated /v1/ocr endpoint)
+│       ├── deepinfra.py           # DeepSeek-OCR
+│       └── openrouter.py          # Qwen2.5-VL-72B-Instruct
 ├── README.md
 └── LICENSE
 ```
+
+### Adding a new VLM provider
+
+1. Create `scripts/providers/<name>.py` subclassing `VLMProvider`
+2. Set the four class attrs: `name`, `default_model`, `env_var`, `endpoint`
+3. Implement `ocr_image(self, image_bytes, *, model=None, lang="ch") -> str`
+4. Register the class in `scripts/providers/__init__.py`'s `PROVIDERS` dict
+
+For OpenAI Chat-Compat APIs you can usually delegate to `self._chat_completion_image(...)`. See `siliconflow.py` for a 10-line example.
 
 ## Quality benchmark
 
@@ -151,13 +194,17 @@ MinerU also delivers correct Chinese punctuation and full-page coherence where E
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--mode` | `auto` | Force `text` / `image_small` / `image_large` |
+| `--mode` | `auto` | Force `text` / `image_small` / `image_vlm` / `image_large` |
+| `--vlm-provider` | `siliconflow` | `siliconflow` / `mistral` / `deepinfra` / `openrouter` |
+| `--vlm-model` | (provider default) | Override the default model name |
 | `--chunk-size` | `50` | Max pages per MinerU invocation. Lower if OOM (try 25 or 10) |
 | `--mineru-backend` | `pipeline` | `pipeline` (CPU) / `hybrid-auto-engine` (GPU) / `vlm-auto-engine` (GPU) |
 | `--lang` | `ch` | OCR language hint (`ch`, `en`, `japan`, `korean`, etc.) |
-| `--render-dpi` | `150` | DPI for `image_small` page rendering |
+| `--render-dpi` | `150` | DPI for `image_small` / `image_vlm` page rendering |
 | `--keep-intermediate` | off | Keep `_chunks/` per-chunk outputs (debugging) |
 | `MINERU_EXE` env | — | Override mineru CLI path |
+| `PDF_SMART_OCR_VLM_PROVIDER` env | — | Override default VLM provider |
+| `<PROVIDER>_API_KEY` env | — | API key per provider (see table above) |
 
 ## Acknowledgements
 

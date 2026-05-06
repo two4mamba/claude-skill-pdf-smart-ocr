@@ -10,8 +10,9 @@ import sys
 from pathlib import Path
 
 
-SMALL_PAGE_THRESHOLD = 10
-TEXT_DENSITY_THRESHOLD = 50  # avg chars per page below this → image PDF
+SMALL_PAGE_THRESHOLD = 50      # ≤ this → Claude vision
+VLM_PAGE_THRESHOLD = 100       # ≤ this (and > SMALL) → cloud VLM API
+TEXT_DENSITY_THRESHOLD = 50    # avg chars per page below this → image PDF
 
 
 def classify(pdf_path: str) -> dict:
@@ -46,6 +47,8 @@ def classify(pdf_path: str) -> dict:
         rec = "text"
     elif n_pages <= SMALL_PAGE_THRESHOLD:
         rec = "image_small"
+    elif n_pages <= VLM_PAGE_THRESHOLD:
+        rec = "image_vlm"
     else:
         rec = "image_large"
 
