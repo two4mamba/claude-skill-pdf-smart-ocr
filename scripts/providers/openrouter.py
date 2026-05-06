@@ -13,7 +13,7 @@ class OpenRouterProvider(VLMProvider):
     endpoint = "https://openrouter.ai/api/v1/chat/completions"
 
     def ocr_image(self, image_bytes, *, model=None, lang="ch"):
-        return self._chat_completion_image(
+        md = self._chat_completion_image(
             self.endpoint,
             model or self.default_model,
             image_bytes,
@@ -23,3 +23,4 @@ class OpenRouterProvider(VLMProvider):
                 "X-Title": "pdf-smart-ocr",
             },
         )
+        return md, {}

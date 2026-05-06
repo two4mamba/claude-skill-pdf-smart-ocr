@@ -45,8 +45,15 @@ class VLMProvider(ABC):
 
     @abstractmethod
     def ocr_image(self, image_bytes: bytes, *, model: Optional[str] = None,
-                  lang: str = "ch") -> str:
-        """OCR a single page (PNG/JPEG bytes) → Markdown."""
+                  lang: str = "ch") -> tuple[str, dict[str, bytes]]:
+        """OCR a single page (PNG/JPEG bytes).
+
+        Returns (markdown, images_dict):
+        - markdown: page content
+        - images_dict: {filename: raw_bytes} for figures the provider extracted.
+                       Most providers return {} (no extraction support).
+                       Mistral OCR fills this from its `pages[*].images` payload.
+        """
 
     # ---- shared helpers ----
 

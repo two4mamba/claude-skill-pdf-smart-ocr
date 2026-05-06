@@ -8,6 +8,7 @@ POST /v1/ocr  with  { model, document: { type: 'image_url', image_url: '...' } }
 """
 from __future__ import annotations
 
+import base64
 import html
 import json
 
@@ -21,23 +22,41 @@ class MistralProvider(VLMProvider):
     endpoint = "https://api.mistral.ai/v1/ocr"
 
     def ocr_image(self, image_bytes, *, model=None, lang="ch"):
-        b64 = self._b64(image_bytes)
+        b64_input = self._b64(image_bytes)
         payload = {
             "model": model or self.default_model,
             "document": {
                 "type": "image_url",
-                "image_url": f"data:image/png;base64,{b64}",
+                "image_url": f"data:image/png;base64,{b64_input}",
             },
-            "include_image_base64": False,
+            "include_image_base64": True,  # ask Mistral to inline figure bytes
         }
         headers = {"Authorization": f"Bearer {self._api_key()}"}
         resp = self._post_json(self.endpoint, headers, payload)
-        # Mistral returns {pages: [{markdown: '...', ...}], ...}
         try:
             pages = resp["pages"]
-            md = "\n\n".join(p.get("markdown", "") for p in pages).strip()
-            return html.unescape(md)  # Mistral escapes `>` as `&gt;` in markdown
         except (KeyError, TypeError) as e:
             raise OcrError(
                 f"Unexpected Mistral OCR response: {json.dumps(resp)[:500]}"
             ) from e
+
+        # We always send a single page (one image), so pages has one entry.
+        md_parts: list[str] = []
+        images: dict[str, bytes] = {}
+        for p in pages:
+            md_parts.append(p.get("markdown", ""))
+            for img in p.get("images", []) or []:
+                img_id = img.get("id")
+                b64 = img.get("image_base64") or ""
+                if not img_id or not b64:
+                    continue
+                # Strip data-URL prefix if present
+                if "," in b64:
+                    b64 = b64.split(",", 1)[1]
+                try:
+                    images[img_id] = base64.b64decode(b64)
+                except Exception:
+                    continue  # skip malformed, keep going
+
+        md = html.unescape("\n\n".join(md_parts).strip())
+        return md, images

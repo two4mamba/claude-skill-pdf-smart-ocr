@@ -136,20 +136,40 @@ def run_image_vlm(
     if not pngs:
         raise SystemExit(f"No pages rendered to {pages_dir}")
 
+    asset_root = out_dir / f"{pdf.stem}.assets"
+    asset_dirname = asset_root.name  # used in markdown image refs
     md_parts: list[str] = []
+    total_images = 0
+
     for i, png in enumerate(pngs, 1):
         log(f"  page {i}/{len(pngs)}: {png.name}")
         img_bytes = png.read_bytes()
         try:
-            md = provider.ocr_image(img_bytes, model=model, lang=lang)
+            md, images = provider.ocr_image(img_bytes, model=model, lang=lang)
         except Exception as e:
             raise SystemExit(f"VLM provider {provider.name} failed on page {i}: {e}")
+
+        # Save extracted figures and rewrite markdown image refs to relative paths.
+        # Per-page prefix avoids cross-page filename collisions (e.g., img-0.jpeg from
+        # page 2 vs page 5).
+        if images:
+            asset_root.mkdir(exist_ok=True)
+            for img_id, raw in images.items():
+                new_name = f"page-{i:03d}-{img_id}"
+                (asset_root / new_name).write_bytes(raw)
+                # rewrite both forms: `![alt](id)` and `![alt](id "title")`
+                md = md.replace(f"]({img_id})", f"]({asset_dirname}/{new_name})")
+                md = md.replace(f"]({img_id} ", f"]({asset_dirname}/{new_name} ")
+                total_images += 1
+
         md_parts.append(md.strip())
 
     final_md = out_dir / f"{pdf.stem}.md"
     final_md.write_text("\n\n---\n\n".join(md_parts), encoding="utf-8")
+    if total_images:
+        log(f"saved {total_images} extracted figures → {asset_root}")
 
-    # Clean rendered pages (we keep only the markdown)
+    # Clean rendered pages (we keep only the markdown + assets)
     shutil.rmtree(pages_dir, ignore_errors=True)
     return final_md
 

@@ -89,7 +89,52 @@ mineru-models-download -s huggingface -m all
 
 Downloads ~5–10 GB of model weights. Takes 2–5 min on a fast connection.
 
-### 3. (Optional) Set MINERU_EXE
+### 3. Configure API keys for cloud VLM mode
+
+Cloud VLM mode (`image_vlm`) needs **one** API key per provider you intend to use. Default is **Mistral**, so set `MISTRAL_API_KEY` first.
+
+#### Where to get a key
+
+| Provider | Sign-up + key page |
+|----------|-------------------|
+| Mistral (default) | https://console.mistral.ai/api-keys — phone verification only, no credit card; 1B tokens/month free |
+| SiliconFlow | https://cloud.siliconflow.cn/account/ak — Chinese telco/WeChat login |
+| DeepInfra | https://deepinfra.com/dash/api_keys — pay-as-you-go |
+| OpenRouter | https://openrouter.ai/keys — credit-based |
+
+#### Set the key (persists across sessions)
+
+**Windows (PowerShell)** — recommended on Windows because it writes to the user registry, persisting across all future shells (and Claude Code restarts):
+
+```powershell
+[Environment]::SetEnvironmentVariable('MISTRAL_API_KEY', 'your-actual-key-here', 'User')
+# repeat for any other provider you'll use:
+[Environment]::SetEnvironmentVariable('SILICONFLOW_API_KEY', 'sk-...', 'User')
+[Environment]::SetEnvironmentVariable('DEEPINFRA_API_KEY', '...', 'User')
+[Environment]::SetEnvironmentVariable('OPENROUTER_API_KEY', 'sk-or-...', 'User')
+
+# Verify (returns the key length, no secrets printed):
+([Environment]::GetEnvironmentVariable('MISTRAL_API_KEY','User')).Length
+```
+
+**Important**: existing PowerShell / Claude Code windows will NOT see the new value until restarted. Open a fresh shell, or for the current session also do `$env:MISTRAL_API_KEY = 'your-key'`.
+
+**macOS / Linux (bash / zsh)** — append to your shell profile so it loads on every new shell:
+
+```bash
+# bash → ~/.bashrc, zsh → ~/.zshrc
+echo 'export MISTRAL_API_KEY="your-actual-key-here"' >> ~/.zshrc
+echo 'export SILICONFLOW_API_KEY="sk-..."' >> ~/.zshrc
+source ~/.zshrc
+```
+
+#### Important: do NOT put keys in source code
+
+This skill is open source. The `env_var` field in each `providers/*.py` file is the **name** of the env var (e.g., `"MISTRAL_API_KEY"`), not the key itself. The key lives only in your OS environment, never in this repo.
+
+If you accidentally commit a real key, rotate it immediately at the provider's dashboard.
+
+### 4. (Optional) Set MINERU_EXE
 
 If `mineru` is not on your `PATH` (e.g., installed in a non-activated venv), set:
 
