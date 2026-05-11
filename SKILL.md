@@ -1,6 +1,6 @@
 ---
 name: pdf-smart-ocr
-description: Smart PDF → Markdown extractor that picks the best engine automatically. Use when the user asks to extract / OCR / convert / parse a PDF (especially scanned, image-based, or PowerPoint-export PDFs) into markdown text. Routes between markitdown (text PDFs), pdftoppm + Claude vision (image PDFs ≤50 pages), cloud VLM APIs (51–100 pages, configurable provider), and MinerU CLI (>100 pages, local). Preserves layout, tables, formulas, headings.
+description: Smart PDF → Markdown/DOCX/PDF extractor that picks the best engine automatically. Use when the user asks to extract / OCR / convert / parse a PDF (especially scanned, image-based, or PowerPoint-export PDFs) into markdown / Word / PDF. Routes between markitdown (text PDFs), pdftoppm + Claude vision (image PDFs ≤50 pages), cloud OCR APIs (51–100 pages: Mistral default, Baidu PaddleOCR-VL official, etc.), and MinerU CLI (>100 pages, local). Preserves layout, tables, formulas, headings. Supports --export md,docx,pdf for multi-format output.
 ---
 
 # pdf-smart-ocr
@@ -46,12 +46,29 @@ Trigger this skill when the user asks any of:
 
 For `image_vlm` mode, additionally **one** of these env vars (per chosen provider):
 
-| Provider (default model) | Env var | Cost | Notes |
+| Provider (default model) | Env var(s) | Cost | Notes |
 |---|---|---|---|
-| **`mistral`** (mistral-ocr-latest) — **default** | `MISTRAL_API_KEY` | $1–2 / 1000 pages; free tier 1 RPS / 1B tok/mo | Best speed (~6 s/page) + reliable layout |
-| `siliconflow` (PaddleOCR-VL-1.5) | `SILICONFLOW_API_KEY` | free (rate-limited) | ~100 s/page on free tier; **hallucinates on visually-complex PPT pages** — use only for clean text-heavy scans |
-| `deepinfra` (deepseek-ai/DeepSeek-OCR) | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok | OpenAI Chat-Compat |
+| **`mistral`** (mistral-ocr-latest) — **default** | `MISTRAL_API_KEY` | $1–2 / 1000 pages; free tier 1 RPS / 1B tok/mo | Best speed (~6 s/page); per-image; reliable layout |
+| **`baidu`** (paddleocr-vl, official) | `BAIDU_API_URL` + `BAIDU_ACCESS_TOKEN` (both from https://aistudio.baidu.com/paddleocr; token rotates ~every 30 days) | First 1000 pages free; ¥0.18/page | **PDF-native** (one sync call per PDF); also saves `<stem>.layout.json` with bbox info |
 | `openrouter` (qwen/qwen2.5-vl-72b-instruct) | `OPENROUTER_API_KEY` | $0.25 in / $0.75 out per M tok | General-purpose VLM |
+| `deepinfra` (deepseek-ai/DeepSeek-OCR) | `DEEPINFRA_API_KEY` | $0.03 in / $0.10 out per M tok | chat-compat fallback |
+| ~~`siliconflow`~~ | `SILICONFLOW_API_KEY` | free | DEPRECATED — empirically hallucinates on visually-complex PPT pages |
+
+For `--export` (multi-format output):
+
+| Format | Extra dependency | Supported by | Notes |
+|---|---|---|---|
+| md | (built-in) | all engines | always works |
+| docx | `pandoc` CLI | all engines | `winget install JohnMacFarlane.Pandoc` |
+| pdf | `pandoc` + Word or LibreOffice | all engines | Windows: `pip install docx2pdf` (needs MS Word). macOS/Linux: install LibreOffice (`brew install --cask libreoffice` / `apt install libreoffice`); skill auto-routes to `soffice --convert-to pdf`. |
+| **layout_html** | (built-in) | **only baidu + MinerU** | absolute-positioned HTML reproducing original page geometry |
+| **layout_pdf** | `playwright` + Chromium | **only baidu + MinerU** | auto-installs on first use (~150 MB Chromium download) |
+
+`layout_html` / `layout_pdf` reconstruct the original PDF's multi-column / image-positioned layout from bbox JSON. Only providers that emit bbox can do this:
+- `--vlm-provider baidu` (saves `<stem>.layout.json`)
+- `--mode image_large` (MinerU saves `<stem>_middle.json`)
+
+For Mistral / OpenRouter / DeepInfra / Claude vision (`image_small`) — these don't emit bbox, so requesting `layout_*` will fail with a clear error message instructing the user to switch to baidu or MinerU.
 
 If a required tool is missing, tell the user which one and stop.
 

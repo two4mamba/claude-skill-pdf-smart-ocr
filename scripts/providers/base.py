@@ -28,7 +28,17 @@ class OcrError(RuntimeError):
 
 
 class VLMProvider(ABC):
-    """Abstract VLM-OCR provider. One image in, Markdown text out."""
+    """Abstract OCR provider.
+
+    Two interaction patterns:
+    - Image-based: one page image in, Markdown out (Mistral, OpenRouter, etc.)
+    - PDF-native: whole PDF in, full Markdown + layout JSON out (Baidu PaddleOCR-VL)
+
+    Set class attribute `supports_pdf = True` to opt into the PDF-native path.
+    """
+
+    # Subclasses override to declare PDF-native support.
+    supports_pdf: bool = False
 
     @property
     @abstractmethod
@@ -54,6 +64,25 @@ class VLMProvider(ABC):
                        Most providers return {} (no extraction support).
                        Mistral OCR fills this from its `pages[*].images` payload.
         """
+
+    def ocr_pdf(self, pdf_bytes: bytes, file_name: str, *,
+                model: Optional[str] = None,
+                lang: str = "ch") -> tuple[str, dict[str, bytes], Optional[dict]]:
+        """Optional: OCR an entire PDF in a single API call.
+
+        Returns (markdown, images_dict, layout_json):
+        - markdown: full document markdown (concatenated pages)
+        - images_dict: {filename: raw_bytes} for all extracted figures
+        - layout_json: provider-specific layout structure (bbox, types, etc.)
+                       Used downstream for layout-preserving exports (.docx/.pdf).
+                       None if the provider doesn't expose it.
+
+        Default: NotImplementedError. Set `supports_pdf = True` and override
+        to enable. The dispatcher in extract.py prefers this path when available.
+        """
+        raise NotImplementedError(
+            f"{self.name} does not support whole-PDF OCR; use ocr_image per page."
+        )
 
     # ---- shared helpers ----
 
