@@ -40,7 +40,7 @@ Trigger this skill when the user asks any of:
 | Tool | Purpose | Verify |
 |------|---------|--------|
 | `pdftoppm` (poppler) | Render PDF → PNG | `pdftoppm -v` |
-| `mineru` CLI | Heavy-duty OCR/VLM parsing (image_large) | `mineru --version` |
+| `mineru` CLI | Heavy-duty OCR/VLM parsing (image_large) | `python "<SKILL_DIR>/scripts/check_mineru.py"` (see "Detecting MinerU" below — do NOT use bare `where mineru` / `mineru --version`) |
 | `markitdown` Python pkg | Fast text-PDF conversion | `python -c "import markitdown"` |
 | `pdfplumber` / `pypdf` / `pypdfium2` | Text-layer probing + page count | `python -c "import pdfplumber"` |
 
@@ -178,12 +178,29 @@ If the user explicitly asks for a specific engine, skip classify and pass `--mod
 - `--mode image_vlm` (force cloud VLM regardless of size; pair with `--vlm-provider`)
 - `--mode image_large` (force local MinerU)
 
+## Detecting MinerU (do not short-circuit)
+
+**Do not** run a bare `where mineru` / `mineru --version` and declare "not installed" if it fails. The skill resolves the MinerU CLI through three steps in `_resolve_mineru_exe()` (in `scripts/extract.py`):
+
+1. `MINERU_EXE` environment variable — if set, used as-is.
+2. PATH lookup via `shutil.which("mineru")`.
+3. Windows fallback `C:\mineru-venv\Scripts\mineru.exe`.
+
+A caller that only checks step 2 will incorrectly conclude MinerU is missing when it is actually reachable via step 1 or step 3. Use the dedicated probe instead, which exercises all three steps:
+
+```bash
+python "<SKILL_DIR>/scripts/check_mineru.py"            # human-readable; exit 0 = found
+python "<SKILL_DIR>/scripts/check_mineru.py" --json     # machine-readable: {available, path, version, resolver_steps}
+```
+
+`check_mineru.py` is the single source of truth — its exit code and JSON output match what `extract.py` will actually do at runtime. If you need to tell the user "MinerU is not installed", run this first and quote its stderr verbatim.
+
 ## Failure handling
 
 | Symptom | Likely cause | Action |
 |---------|-------------|--------|
 | `pdftoppm: not found` | poppler missing or PATH not refreshed | Check `where pdftoppm`; restart shell |
-| `mineru: not found` | venv not activated / not on PATH | Set `MINERU_EXE` env var or activate venv |
+| `mineru: not found` (from the skill itself) | All three resolver steps failed | Run `python "<SKILL_DIR>/scripts/check_mineru.py"` to confirm, then either `pip install -U "mineru[core]"` or set `MINERU_EXE` to the full path |
 | MinerU first run hangs | Downloading models (~1 GB) | Inform user; subsequent runs are fast |
 | OOM during MinerU | per-chunk RAM too high | Re-run with smaller `--chunk-size 25` (or 10) |
 | `Missing API key. Set environment variable XXX_API_KEY` | VLM provider key not exported | Set the named env var, retry |
